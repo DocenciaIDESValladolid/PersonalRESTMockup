@@ -1,0 +1,146 @@
+openapi: "3.0.3"
+info:
+  title: API de Búsqueda de Personal (AND y OR combinados)
+  description: |
+    Permite la búsqueda parcial en nombre, apellido, email, documento, uid.
+    Incluye el parámetro "logic" para indicar si se combinan los criterios con AND o con OR.
+  version: "1.0.0"
+
+servers:
+  - url: http://127.0.0.1:8000
+    description: Servidor local
+
+paths:
+  /personal:
+    get:
+      summary: Búsqueda parcial en varios campos
+      description: >
+        Se buscan usuarios que coincidan en uno o varios campos (nombre, apellido, email, documento, uid).
+        Mediante el parámetro "logic" se decide si la coincidencia se hace con OR o AND.
+      parameters:
+        - name: nombre
+          in: query
+          schema:
+            type: string
+          required: false
+          description: Subcadena a buscar en el "nombre"
+        - name: apellido
+          in: query
+          schema:
+            type: string
+          required: false
+          description: Subcadena a buscar en "apellido1" o "apellido2"
+        - name: email
+          in: query
+          schema:
+            type: string
+          required: false
+          description: Subcadena a buscar en el "email"
+        - name: documento
+          in: query
+          schema:
+            type: string
+          required: false
+          description: Subcadena a buscar en el "documento"
+        - name: uid
+          in: query
+          schema:
+            type: string
+          required: false
+          description: Subcadena a buscar en el "uid"
+        - name: logic
+          in: query
+          schema:
+            type: string
+            enum: [and, or]
+            default: or
+          required: false
+          description: >
+            Modo de combinar las coincidencias:
+             - "or" (predeterminado): el usuario coincide si algún campo coincide.
+             - "and": el usuario coincide si todos los campos especificados coinciden.
+      responses:
+        "200":
+          description: Se encontraron resultados
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Persona"
+        "204":
+          description: Sin resultados
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRespuesta"
+        "400":
+          description: Error en la petición (no se proporcionó ningún campo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRespuesta"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRespuesta"
+        "403":
+          description: Prohibido (filtrado de IP)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRespuesta"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRespuesta"
+      security:
+        - BasicAuth: []
+        - BearerAuth: []
+
+components:
+  schemas:
+    Persona:
+      type: object
+      properties:
+        uid:
+          type: string
+        nombre:
+          type: string
+        apellido1:
+          type: string
+        apellido2:
+          type: string
+        documento:
+          type: string
+        email:
+          type: string
+        colectivos:
+          type: array
+          items:
+            type: string
+    ErrorRespuesta:
+      type: object
+      properties:
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

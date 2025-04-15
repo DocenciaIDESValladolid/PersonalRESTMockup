@@ -1,12 +1,14 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from typing import List
+from typing import Optional
 from datetime import datetime
 import base64
 
-app = FastAPI(title="API de Búsqueda de Personal", version="1.0.0")
+app = FastAPI(
+    title="API de Búsqueda (AND y OR en criterios parciales)",
+    version="1.0.0"
+)
 
-# Datos de ejemplo (mockup)
 usuarios = [
     {
         "nombre": "Juan",
@@ -64,41 +66,38 @@ usuarios = [
     }
 ]
 
-# Validaciones de autenticación
-ALLOWED_IPS = {"127.0.0.1"}  # Permitir IP local en Basic Auth (ejemplo)
-VALID_USER = {"username": "apiuser", "password": "secret"}  # Credenciales Basic
-VALID_TOKEN = "ABC123TOKEN"  # Bearer token válido
+# Autenticación básica de ejemplo
+ALLOWED_IPS = {"127.0.0.1"}
+VALID_USER = {"username": "apiuser", "password": "secret"}
+VALID_TOKEN = "ABC123TOKEN"
 
 def verificar_autenticacion(request: Request):
-    # Verifica la cabecera Authorization para aceptar Basic Auth o Bearer token.
-    # Aplica filtrado de IP para Basic Auth. Lanza HTTPException si falla.
     auth_header = request.headers.get("authorization")
     if not auth_header:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization header")
+
     if auth_header.startswith("Basic "):
         # Basic Auth
         try:
-            basic_credentials = auth_header[len("Basic "):]
-            decoded = base64.b64decode(basic_credentials).decode("utf-8")
+            encoded = auth_header[len("Basic "):]
+            decoded = base64.b64decode(encoded).decode("utf-8")
             username, password = decoded.split(":")
-        except Exception:
+        except:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Basic Auth header")
         # Validar usuario/contraseña
         if username != VALID_USER["username"] or password != VALID_USER["password"]:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
-        # Filtrado de IP
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Basic credentials")
+        # Filtrar IP
         client_ip = request.client.host
         if client_ip not in ALLOWED_IPS:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access forbidden from this IP")
-        return True
+
     elif auth_header.startswith("Bearer "):
         # Bearer token
         token = auth_header[len("Bearer "):]
         if token != VALID_TOKEN:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-        return True
     else:
-        # No coincide con Basic ni Bearer
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication scheme")
 
 def auth_dependency(request: Request):
@@ -113,61 +112,88 @@ def error_json(status_code: int, error: str, message: str):
         "timestamp": datetime.now().isoformat()
     }
 
-# Funciones auxiliares
-def buscar_por_uid(uid: str):
-    for u in usuarios:
-        if u["uid"].lower() == uid.lower():
-            return u
-    return None
-
-def buscar_por_email(email: str):
-    for u in usuarios:
-        if u["email"].lower() == email.lower():
-            return u
-    return None
-
-def filtrar_usuarios_general(query: str) -> List[dict]:
-    q = query.lower()
-    results = []
-    for u in usuarios:
-        if (q in u["uid"].lower() or
-            q in u["documento"].lower() or
-            q in u["nombre"].lower() or
-            q in u["apellido1"].lower() or
-            q in u["apellido2"].lower() or
-            q in u["email"].lower()):
-            results.append(u)
-    return results
-
-# Endpoints
-
-@app.get("/personal/uid/{uid}", dependencies=[Depends(auth_dependency)])
-def get_user_by_uid(uid: str):
-    user = buscar_por_uid(uid)
-    if user:
-        return user
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=error_json(
-        404, "Not Found", f"No existe un usuario con UID: {uid}"
-    ))
-
-@app.get("/personal/email/{email}", dependencies=[Depends(auth_dependency)])
-def get_user_by_email(email: str):
-    user = buscar_por_email(email)
-    if user:
-        return user
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=error_json(
-        404, "Not Found", f"No existe un usuario con email: {email}"
-    ))
-
 @app.get("/personal", dependencies=[Depends(auth_dependency)])
-def search_users(query: str = None):
-    if not query:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_json(
-            400, "Bad Request", "Debe proporcionar el parámetro 'query'."
-        ))
-    results = filtrar_usuarios_general(query)
-    if results:
-        return results
-    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content=error_json(
-        204, "No Content", f"No se encontraron usuarios para el query: '{query}'"
-    ))
+def buscar_personas(
+    nombre: Optional[str] = None,
+    apellido: Optional[str] = None,
+    email: Optional[str] = None,
+    documento: Optional[str] = None,
+    uid: Optional[str] = None,
+    logic: str = "or"  # "and" o "or"
+):
+    """
+    Búsqueda parcial en varios campos, combinable en AND u OR.
+    Si logic="or", basta que coincida con alguno de los campos no nulos.
+    Si logic="and", debe coincidir en todos los campos no nulos.
+    """
+    # Verificamos si no se han proporcionado parámetros de búsqueda
+    if not (nombre or apellido or email or documento or uid):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_json(
+                400, 
+                "Bad Request", 
+                "Debe proporcionar al menos un parámetro de búsqueda"
+            )
+        )
+
+    # Convertimos cada string a minúsculas para comparar
+    q_nombre = nombre.lower() if nombre else None
+    q_apellido = apellido.lower() if apellido else None
+    q_email = email.lower() if email else None
+    q_documento = documento.lower() if documento else None
+    q_uid = uid.lower() if uid else None
+
+    resultados = []
+
+    for user in usuarios:
+        # Comprobamos coincidencias parciales (substrings)
+        coincide_nombre = (q_nombre in user["nombre"].lower()) if q_nombre else False
+        coincide_apellido = (q_apellido in user["apellido1"].lower() or
+                             q_apellido in user["apellido2"].lower()) if q_apellido else False
+        coincide_email = (q_email in user["email"].lower()) if q_email else False
+        coincide_documento = (q_documento in user["documento"].lower()) if q_documento else False
+        coincide_uid = (q_uid in user["uid"].lower()) if q_uid else False
+
+        if logic.lower() == "and":
+            # Debe coincidir en TODOS los campos que se hayan proporcionado
+            # Si el campo no se proporcionó, no es obligatorio que coincida
+            # => coincide_nombre OR q_nombre is None => interpretamos que no impide la coincidencia
+            # => Podemos reinterpretar en boolean logic
+            # Explicación:
+            # - Si q_nombre != None, coincide_nombre debe ser True.
+            # - Si q_nombre == None, no afecta.
+            # Repetir para los demás campos.
+            must_match_all = True
+
+            if q_nombre and not coincide_nombre:
+                must_match_all = False
+            if q_apellido and not coincide_apellido:
+                must_match_all = False
+            if q_email and not coincide_email:
+                must_match_all = False
+            if q_documento and not coincide_documento:
+                must_match_all = False
+            if q_uid and not coincide_uid:
+                must_match_all = False
+
+            if must_match_all:
+                resultados.append(user)
+
+        else:  # logic="or" por defecto
+            # Basta con que alguno sea True
+            if (coincide_nombre or coincide_apellido or coincide_email or 
+                coincide_documento or coincide_uid):
+                resultados.append(user)
+
+    if resultados:
+        return resultados
+    else:
+        return JSONResponse(
+            status_code=status.HTTP_204_NO_CONTENT,
+            content=error_json(
+                204, 
+                "No Content", 
+                "No se encontraron usuarios que coincidan con los criterios"
+            )
+        )
